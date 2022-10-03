@@ -18,7 +18,7 @@ def get_file_cols():
     message_cols = ['time','type','order_id','size','price','direction']
     return orderbook_cols, message_cols
 
-def read_venues(max_time=None):
+def read_venues(max_time=40000):
     venues_dict = dict()
     venues = os.listdir('data')
     for venue in venues:
