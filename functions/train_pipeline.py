@@ -18,7 +18,7 @@ def get_file_cols():
     message_cols = ['time','type','order_id','size','price','direction']
     return orderbook_cols, message_cols
 
-def read_venues():
+def read_venues(max_time=None):
     venues_dict = dict()
     venues = os.listdir('data')
     for venue in venues:
@@ -31,6 +31,8 @@ def read_venues():
             message = pd.read_csv(f'data/{venue}/{message_file}',header=None)
             message.columns = message_cols  
             lob = pd.concat([orderbook,message],axis=1)
+            if max_time is not None:
+                lob = lob[lob.time<max_time].reset_index(drop=True)
             venues_dict[venue]=lob
         except:
             pass
