@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import plotly.io as pio
 import dill
+import re
 from functions.avellaneda_stoikov_model import get_stoikov_prices
 
 def get_file_cols():
@@ -39,15 +40,23 @@ def read_venues(max_time=40000):
     return venues_dict
 
 def get_agg_price_x(x, n_venues):
-    agg_ask = min(x[[f'venue{i}_ask_price_1' for i in range(n_venues)]])
-    agg_bid = max(x[[f'venue{i}_bid_price_1' for i in range(n_venues)]])
-    agg_price = (agg_bid+agg_ask)/2
-    return agg_price
+    m = min([x[f'venue{i}_ask_price_1']/10000 for i in range(5)])
+    best_ask_venue = [x[f'venue{i}_ask_price_1']/10000 for i in range(5)].index(m)
+    i = best_ask_venue
+    agg_imbalance_midprice = x[f'venue{i}_imbalance_lv1']*x[f'venue{i}_ask_price_1']+(1-x[f'venue{i}_imbalance_lv1'])*x[f'venue{i}_bid_price_1']
+    agg_price = (x[f'venue{i}_ask_price_1']+x[f'venue{i}_bid_price_1'])/2
+    return [agg_imbalance_midprice, agg_price]
 
 def feat_eng(venues_dict):
     n_venues = len(venues_dict.keys())
     for i, key in enumerate(venues_dict.keys()):
         print(i,key)
+        venues_dict[key]['spread'] = 100*(venues_dict[key].ask_price_1 - venues_dict[key].bid_price_1)/venues_dict[key].bid_price_1
+        for level in range(5):
+            level_=level+1
+            venues_dict[key][f'imbalance_lv{level_}'] = venues_dict[key][f'bid_price_{level_}']/(venues_dict[key][f'bid_price_{level_}']+venues_dict[key][f'ask_price_{level_}'])
+        venues_dict[key]['imbalance_midprice'] = venues_dict[key][f'imbalance_lv1']*venues_dict[key][f'ask_price_1']+(1-venues_dict[key][f'imbalance_lv1'])*venues_dict[key][f'bid_price_1']
+        venues_dict[key]['midprice'] = (venues_dict[key][f'ask_price_1']+venues_dict[key][f'bid_price_1'])/2
         prices = venues_dict[key].price.tolist()
         time = venues_dict[key].time.tolist()         
         venues_dict[key]['stoikov'] = get_stoikov_prices(prices,time)
@@ -56,24 +65,30 @@ def feat_eng(venues_dict):
                                                 right, 
                                                 on='time', 
                                                 direction='nearest'), 
-                       list(venues_dict.values()))    
-    df['agg_price'] = df.apply(lambda x:get_agg_price_x(x,n_venues), axis=1) 
+                       list(venues_dict.values()))   
+    agg_price_metrics = df.apply(lambda x:get_agg_price_x(x,n_venues), axis=1) 
+    df['agg_price'] = [x[1] for x in agg_price_metrics]
+    df['agg_imbalance_midprice'] = [x[0] for x in agg_price_metrics]
     df['agg_stoikov'] = get_stoikov_prices(prices = df.agg_price.tolist(),
                                            time = df.time.tolist())
+    df['agg_stoikov']=df['agg_stoikov'].replace(0,df['agg_stoikov'].mean())
     return df
 
 def build_target(df, target='midprice',steps_ahead = 5):
     if target=='midprice':   
         df['target'] = df.agg_price.shift(steps_ahead)/df.agg_price-1
-    if target=='stoikov':   
+    if target=='stoikov_microprice':   
         df['target'] = df.agg_stoikov.shift(steps_ahead)/df.agg_stoikov-1
+    if target=='imbalance_midprice':   
+        df['target'] = df.agg_imbalance_midprice.shift(steps_ahead)/df.agg_imbalance_midprice-1        
     df['target'] = df['target']*1000
     df = df.dropna()
     df = df[df.target!=0]
     return df
 
 def train(df, n_venues):
-    train_vars = [x for x in df.columns if x not in ['time','target']]
+    train_vars_regex = ['_direction','_spread','_imbalance','_midprice','_stoikov']
+    train_vars = [x for x in df.columns if not('agg_' in x) and (any(substring in x for substring in train_vars_regex))]
     X, y = df[train_vars], df['target']
     model = xgboost.XGBRegressor().fit(X, y)
     predictions = model.predict(X)
